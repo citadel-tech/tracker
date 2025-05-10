@@ -1,21 +1,19 @@
-use std::sync::mpsc::Sender;
+use tokio::{sync::mpsc::Sender, time::Instant};
 
-use bitcoincore_rpc::bitcoin::absolute::{Height, LockTime};
+use bitcoincore_rpc::{bitcoin::absolute::{Height, LockTime}};
+use tracing::info;
 
 use super::rpc::BitcoinRpc;
 use crate::{
-    handle_result, status,
-    types::{DbRequest, ServerInfo},
+    handle_result, status, types::{DbRequest, ServerInfo}
 };
 
-pub fn run(
-    _db_tx: Sender<DbRequest>,
+pub async fn run(
+    db_tx: Sender<DbRequest>,
     status_tx: status::Sender,
-    url: String,
-    username: String,
-    password: String,
+    client: BitcoinRpc
 ) {
-    let client = BitcoinRpc::new(url, username, password).unwrap();
+    info!("Indexer started");
     let mut last_tip = 0;
     loop {
         let blockchain_info = handle_result!(status_tx, client.get_blockchain_info());
@@ -41,10 +39,14 @@ pub fn run(
                 if let Some(onion_address) = onion_address {
                     let server_info = ServerInfo {
                         onion_address: onion_address.clone(),
-                        rate: 0.0,
-                        uptime: 0,
+                        cooldown: Instant::now(),
+                        stale: false
                     };
-                    let _ = DbRequest::Add(onion_address, server_info);
+                    info!("New address found: {:?}", onion_address);
+                    let db_request = DbRequest::Add(onion_address, server_info);
+
+                    handle_result!(status_tx, db_tx.send(db_request).await);
+
                 }
             }
         }

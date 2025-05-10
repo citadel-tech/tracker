@@ -1,5 +1,5 @@
 use crate::{error::TrackerError, handle_error::ErrorBranch};
-use std::sync::mpsc::{self, SendError};
+use tokio::sync::mpsc::{self, error::SendError};
 
 #[derive(Debug)]
 pub enum Sender {
@@ -9,11 +9,11 @@ pub enum Sender {
 }
 
 impl Sender {
-    pub fn send(&self, status: Status) -> Result<(), SendError<Status>> {
+    pub async fn send(&self, status: Status) -> Result<(), SendError<Status>> {
         match self {
-            Self::Mempool(inner) => inner.send(status),
-            Self::Server(inner) => inner.send(status),
-            Self::DBManager(inner) => inner.send(status),
+            Self::Mempool(inner) => inner.send(status).await,
+            Self::Server(inner) => inner.send(status).await,
+            Self::DBManager(inner) => inner.send(status).await,
         }
     }
 }
@@ -41,46 +41,47 @@ pub struct Status {
     pub state: State,
 }
 
-fn send_status(sender: &Sender, e: TrackerError, outcome: ErrorBranch) -> ErrorBranch {
+async fn send_status(sender: &Sender, e: TrackerError, outcome: ErrorBranch) -> ErrorBranch {
     match sender {
         Sender::Mempool(tx) => match e {
             TrackerError::MempoolIndexerError => {
                 tx.send(Status {
                     state: State::MempoolShutdown(e),
                 })
-                .unwrap_or(());
+                .await.unwrap_or(());
             }
             _ => {
-                // let string_err = e.to_string();
                 tx.send(Status {
                     state: State::Healthy("error occured in mempool".to_string()),
                 })
-                .unwrap_or(());
+                .await.unwrap_or(());
             }
         },
         Sender::Server(tx) => {
             tx.send(Status {
                 state: State::ServerShutdown(e),
             })
-            .unwrap_or(());
+            .await.unwrap_or(());
         }
         Sender::DBManager(tx) => {
             tx.send(Status {
                 state: State::DBShutdown(e),
             })
-            .unwrap_or(());
+            .await.unwrap_or(());
         }
     }
     outcome
 }
 
-pub fn handle_error(sender: &Sender, e: TrackerError) -> ErrorBranch {
+pub async fn handle_error(sender: &Sender, e: TrackerError) -> ErrorBranch {
     match e {
-        TrackerError::DbManagerExited => send_status(sender, e, ErrorBranch::Break),
-        TrackerError::MempoolIndexerError => send_status(sender, e, ErrorBranch::Break),
-        TrackerError::ServerError => send_status(sender, e, ErrorBranch::Break),
-        TrackerError::Shutdown => send_status(sender, e, ErrorBranch::Break),
-        TrackerError::IOError(_) => send_status(sender, e, ErrorBranch::Break),
-        TrackerError::RPCError(_) => send_status(sender, e, ErrorBranch::Break),
+        TrackerError::DbManagerExited => send_status(sender, e, ErrorBranch::Break).await,
+        TrackerError::MempoolIndexerError => send_status(sender, e, ErrorBranch::Break).await,
+        TrackerError::ServerError => send_status(sender, e, ErrorBranch::Break).await,
+        TrackerError::Shutdown => send_status(sender, e, ErrorBranch::Break).await,
+        TrackerError::IOError(_) => send_status(sender, e, ErrorBranch::Break).await,
+        TrackerError::RPCError(_) => send_status(sender, e, ErrorBranch::Break).await,
+        TrackerError::ParsingError => send_status(sender, e, ErrorBranch::Continue).await,
+        TrackerError::SendError => send_status(sender, e, ErrorBranch::Break).await
     }
 }

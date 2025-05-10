@@ -1,67 +1,113 @@
-use mio::{Events, Interest, Poll, Token, net::TcpStream};
-use std::collections::HashMap;
-use std::io::ErrorKind;
-use std::io::Read;
-use std::io::Write;
-use std::sync::mpsc;
-use std::sync::mpsc::Sender;
-
-use crate::handle_result;
+use tokio::io::AsyncWriteExt;
+use tokio::net::TcpListener;
+use tokio::sync::mpsc;
+use tokio::sync::mpsc::Sender;
+use tracing::{info, error};
+use tokio::io::BufReader;
+use tokio::io::BufWriter;
+use crate::error::TrackerError;
+use crate::server::tracker_monitor::monitor_systems;
+use tokio::io::AsyncBufReadExt;
 use crate::status;
 use crate::types::DbRequest;
 
-const SERVER: Token = Token(0);
+pub async fn run(db_tx: Sender<DbRequest>, status_tx: status::Sender, address: String) -> Result<(), Box<dyn std::error::Error + Send + Sync>>{
 
-pub fn run(db_tx: Sender<DbRequest>, status_tx: status::Sender) {
-    let addr = "127.0.0.1:8080".parse().unwrap();
-    let mut events = Events::with_capacity(1024);
-    let mut poll = Poll::new().unwrap();
-    let mut server = mio::net::TcpListener::bind(addr).expect("Port binding failed");
-    poll.registry()
-        .register(&mut server, SERVER, Interest::READABLE)
-        .expect("Couldn't register the file descriptors");
+    let server = TcpListener::bind(&address).await?;
 
-    let mut clients: HashMap<Token, TcpStream> = HashMap::new();
-    let mut unique_token = 1;
+    tokio::spawn(monitor_systems(db_tx.clone(), status_tx.clone()));
 
-    loop {
-        handle_result!(status_tx, poll.poll(&mut events, None));
-        let _ = events.iter().map(|e| match e.token() {
-            SERVER => {
-                if let Ok((mut connection, _)) = server.accept() {
-                    let token = Token(unique_token);
-                    unique_token += 1;
-                    poll.registry()
-                        .register(&mut connection, token, Interest::READABLE)
-                        .unwrap();
-                    clients.insert(token, connection);
+    info!("Tracker server listening on {}", address);
+
+    while let Ok((stream, client_addr)) = server.accept().await {
+        info!("Accepted connection from {}", client_addr);
+        let status_tx_clone = status_tx.clone();
+        let db_tx_clone = db_tx.clone();
+        tokio::spawn(async move {
+            let (reader_part, writer_part) = stream.into_split();
+            let mut reader = BufReader::new(reader_part);
+            let mut writer = BufWriter::new(writer_part);
+            let mut line = String::new();
+            loop {
+                line.clear();
+                let bytes_read = match reader.read_line(&mut line).await {
+                     Ok(n) => n,
+                     Err(e) => {
+                        error!("Error reading from {}: {}", client_addr, e);
+                        let _ = status_tx_clone.send(status::Status {
+                            state: status::State::ServerShutdown(TrackerError::IOError(e)) 
+                        }).await;
+                        return;
+                     }
+                };
+
+                info!("Bytes read: {:?}", bytes_read);
+
+                let request_message = line.trim();
+
+                if request_message.is_empty() {
+                    continue;
                 }
-            }
-            token => {
-                if let Some(client) = clients.get_mut(&token) {
-                    let mut buf = [0; 1024];
-                    match client.read(&mut buf) {
-                        Ok(0) => {
-                            clients.remove(&token);
-                        }
-                        Ok(n) => {
-                            let request = String::from_utf8_lossy(&buf[..n]);
-                            if request.contains("GET") {
-                                let (resp_tx, resp_rx) = mpsc::channel();
-                                let _ = db_tx.send(DbRequest::Query("asc".to_string(), resp_tx));
-                                if let Ok(server) = resp_rx.recv() {
-                                    let response = format!("{:?}", server);
-                                    let _ = client.write_all(response.as_bytes());
-                                }
+
+                info!("Received message from {}: {:?}", client_addr, request_message);
+
+                let response_message: String;
+
+                if request_message.starts_with("QUERY ") {
+
+                    let (resp_tx, mut resp_rx) = mpsc::channel(1); 
+                    let db_request = DbRequest::QueryActive(resp_tx);
+                    let send_res = db_tx_clone.send(db_request).await;
+
+                    if let Err(e) = send_res {
+                        error!("Error sending DB query for {}: {}", client_addr, e);
+                         let _ = status_tx_clone.send(status::Status {
+                             state: status::State::ServerShutdown(TrackerError::DbManagerExited) // Example error
+                         }).await;
+                         response_message = "ERROR: DB query failed".to_string();
+                    } else {
+                        match resp_rx.recv().await {
+                            Some(server_info) => {
+                                response_message = format!("OK: {:?}", server_info);
+                            }
+                            None => {
+                                response_message = "NOT_FOUND".to_string();
                             }
                         }
-                        Err(e) if e.kind() == ErrorKind::WouldBlock => {}
-                        Err(_) => {
-                            clients.remove(&token);
-                        }
                     }
+                } else if request_message.starts_with("ADD ") {
+                     response_message = "ERROR: Add command not implemented via server".to_string();
                 }
+                 else {
+                    response_message = format!("ERROR: Unknown command '{}'", request_message); // Custom protocol error
+                }
+
+                let write_res = writer.write_all(response_message.as_bytes()).await;
+                if let Err(e) = write_res {
+                     error!("Error writing to {}: {}", client_addr, e);
+                    let _ = status_tx_clone.send(status::Status {
+                        state: status::State::ServerShutdown(TrackerError::IOError(e))
+                    }).await;
+                    return; 
+                 }
+                 if let Err(e) = writer.write_all(b"\n").await {
+                      error!("Error writing newline to {}: {}", client_addr, e);
+                      let _ = status_tx_clone.send(status::Status {
+                        state: status::State::ServerShutdown(TrackerError::IOError(e))
+                    }).await;
+                 }
+                if let Err(e) = writer.flush().await {
+                    error!("Error flushing writer for {}: {}", client_addr, e);
+                     let _ = status_tx_clone.send(status::Status {
+                        state: status::State::ServerShutdown(TrackerError::IOError(e))
+                    }).await;
+                    return;
+                }
+                 println!("Sent response to {}", client_addr);
             }
         });
     }
+
+    Ok(())
+
 }
