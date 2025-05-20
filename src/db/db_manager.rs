@@ -20,7 +20,7 @@ pub async fn run(mut rx: Receiver<DbRequest>, status_tx: status::Sender) {
             DbRequest::Query(addr, resp_tx) => {
                 info!("Query request intecepted");
                 let result = servers.get(&addr).cloned();
-                let _ = resp_tx.send(result);
+                let _ = resp_tx.send(result).await;
             }
             DbRequest::Update(addr, server_info) => {
                 info!("Update request intercepted");
@@ -28,20 +28,25 @@ pub async fn run(mut rx: Receiver<DbRequest>, status_tx: status::Sender) {
             }
             DbRequest::QueryAll(resp_tx) => {
                 info!("Query all request intercepted");
-                let response: Vec<(String, ServerInfo)> = servers.iter()
-                .map(|e| (e.0.clone(), e.1.clone()))
-                .collect();
+                let response: Vec<(String, ServerInfo)> =
+                    servers.iter().map(|e| (e.0.clone(), e.1.clone())).collect();
                 let _ = resp_tx.send(response).await;
             }
             DbRequest::QueryActive(resp_tx) => {
                 info!("Query active intercepted");
-                let response: Vec<(String, ServerInfo)> = servers.iter().filter(|x|  !x.1.stale).map(|e|(e.0.clone(), e.1.clone())).collect();
+                let response: Vec<String> = servers
+                    .iter()
+                    .filter(|x| !x.1.stale)
+                    .map(|e| e.0.clone())
+                    .collect();
                 let _ = resp_tx.send(response).await;
             }
         }
     }
 
-    let _ = status_tx.send(Status {
-        state: status::State::DBShutdown(TrackerError::DbManagerExited),
-    }).await;
+    let _ = status_tx
+        .send(Status {
+            state: status::State::DBShutdown(TrackerError::DbManagerExited),
+        })
+        .await;
 }

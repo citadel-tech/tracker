@@ -1,5 +1,5 @@
-use std::error::Error;
 use crate::DbRequest;
+use std::error::Error;
 
 #[derive(Debug)]
 pub enum TrackerError {
@@ -11,6 +11,8 @@ pub enum TrackerError {
     SendError,
     IOError(std::io::Error),
     RPCError(bitcoincore_rpc::Error),
+    SerdeCbor(serde_cbor::Error),
+    General(String),
 }
 
 impl From<std::io::Error> for TrackerError {
@@ -37,8 +39,14 @@ impl std::fmt::Display for TrackerError {
     }
 }
 
-impl From<tokio::sync::mpsc::error::SendError<DbRequest>>  for TrackerError {
+impl From<tokio::sync::mpsc::error::SendError<DbRequest>> for TrackerError {
     fn from(_: tokio::sync::mpsc::error::SendError<DbRequest>) -> Self {
         Self::SendError
+    }
+}
+
+impl From<serde_cbor::Error> for TrackerError {
+    fn from(value: serde_cbor::Error) -> Self {
+        Self::SerdeCbor(value)
     }
 }

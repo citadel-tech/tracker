@@ -48,26 +48,30 @@ async fn send_status(sender: &Sender, e: TrackerError, outcome: ErrorBranch) -> 
                 tx.send(Status {
                     state: State::MempoolShutdown(e),
                 })
-                .await.unwrap_or(());
+                .await
+                .unwrap_or(());
             }
             _ => {
                 tx.send(Status {
                     state: State::Healthy("error occured in mempool".to_string()),
                 })
-                .await.unwrap_or(());
+                .await
+                .unwrap_or(());
             }
         },
         Sender::Server(tx) => {
             tx.send(Status {
                 state: State::ServerShutdown(e),
             })
-            .await.unwrap_or(());
+            .await
+            .unwrap_or(());
         }
         Sender::DBManager(tx) => {
             tx.send(Status {
                 state: State::DBShutdown(e),
             })
-            .await.unwrap_or(());
+            .await
+            .unwrap_or(());
         }
     }
     outcome
@@ -82,6 +86,8 @@ pub async fn handle_error(sender: &Sender, e: TrackerError) -> ErrorBranch {
         TrackerError::IOError(_) => send_status(sender, e, ErrorBranch::Break).await,
         TrackerError::RPCError(_) => send_status(sender, e, ErrorBranch::Break).await,
         TrackerError::ParsingError => send_status(sender, e, ErrorBranch::Continue).await,
-        TrackerError::SendError => send_status(sender, e, ErrorBranch::Break).await
+        TrackerError::SendError => send_status(sender, e, ErrorBranch::Break).await,
+        TrackerError::SerdeCbor(_) => send_status(sender, e, ErrorBranch::Break).await,
+        TrackerError::General(_) => send_status(sender, e, ErrorBranch::Break).await,
     }
 }

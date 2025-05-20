@@ -1,25 +1,28 @@
-use std::error::Error;
 use std::time::Duration;
 
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter},
-    net::TcpStream,
     sync::mpsc::Sender,
-    time::{sleep, Instant},
+    time::{Instant, sleep},
 };
-use tracing::{ info, error };
+use tokio_socks::tcp::Socks5Stream;
+use tracing::info;
 
-use crate::{handle_result, status, types::{DbRequest, ServerInfo}};
+use crate::{
+    error::TrackerError,
+    handle_result, status,
+    types::{DbRequest, DnsRequest, DnsResponse, ServerInfo},
+    utils::{read_message, send_message},
+};
 
 const COOLDOWN_PERIOD: u64 = 5 * 60;
 
 pub async fn monitor_systems(
     db_tx: Sender<DbRequest>,
     status_tx: status::Sender,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
+    socks_port: u16,
+) -> Result<(), TrackerError> {
     info!("Starting to monitor other maker services");
     loop {
-
         sleep(Duration::from_secs(1000)).await;
 
         let (response_tx, mut response_rx) = tokio::sync::mpsc::channel(1);
@@ -34,28 +37,29 @@ pub async fn monitor_systems(
                     continue;
                 }
 
-                match TcpStream::connect(&address).await {
-                    Ok(stream) => {
-                        let (reader, writer) = stream.into_split();
-                        let mut buf_reader = BufReader::new(reader);
-                        let mut buf_writer = BufWriter::new(writer);
+                match Socks5Stream::connect(
+                    format!("127.0.0.1:{:?}", socks_port).as_str(),
+                    address.clone(),
+                )
+                .await
+                {
+                    Ok(mut stream) => {
+                        let message = DnsResponse::Ping;
+                        _ = send_message(&mut stream, &message).await;
 
-                        if let Err(e) = buf_writer.write_all(b"send").await {
-                            error!("Error: {:?}", e);
-                            continue;
+                        let buffer = handle_result!(status_tx, read_message(&mut stream).await);
+                        let response: DnsRequest =
+                            handle_result!(status_tx, serde_cbor::de::from_reader(&buffer[..]));
+
+                        if let DnsRequest::Pong { address } = response {
+                            let updated_info = ServerInfo {
+                                onion_address: address.clone(),
+                                cooldown: Instant::now(),
+                                stale: false,
+                            };
+
+                            let _ = db_tx.send(DbRequest::Update(address, updated_info)).await;
                         }
-
-                        let mut response = String::new();
-                        let n = handle_result!(status_tx, buf_reader.read_to_string(&mut response).await);
-                        info!("Number of bytes read: {:?}", n);
-
-                        let updated_info = ServerInfo {
-                            onion_address: response,
-                            cooldown: Instant::now(),
-                            stale: false,
-                        };
-
-                        let _ = db_tx.send(DbRequest::Update(address, updated_info)).await;
                     }
                     Err(_) => {
                         if !server_info.stale {
