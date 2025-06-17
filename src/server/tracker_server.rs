@@ -6,6 +6,8 @@ use crate::types::DnsRequest;
 use crate::types::DnsResponse;
 use crate::utils::read_message;
 use crate::utils::send_message;
+use tokio::io::BufReader;
+use tokio::io::BufWriter;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
@@ -39,8 +41,13 @@ pub async fn run(
 }
 
 async fn handle_client(mut stream: TcpStream, status_tx: status::Sender, db_tx: Sender<DbRequest>) {
+    let (read_half, write_half) = stream.split();
+
+    let mut reader = BufReader::new(read_half);
+    let mut writer = BufWriter::new(write_half);
+
     loop {
-        let buffer = handle_result!(status_tx, read_message(&mut stream).await);
+        let buffer = handle_result!(status_tx, read_message(&mut reader).await);
         let request: DnsRequest =
             handle_result!(status_tx, serde_cbor::de::from_reader(&buffer[..]));
 
@@ -53,7 +60,7 @@ async fn handle_client(mut stream: TcpStream, status_tx: status::Sender, db_tx: 
                 let response = resp_rx.recv().await;
                 if let Some(addresses) = response {
                     let message = DnsResponse::Address { addresses };
-                    _ = send_message(&mut stream, &message).await;
+                    _ = send_message(&mut writer, &message).await;
                 }
             }
             DnsRequest::Post { metadata: _ } => {

@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use tokio::{sync::mpsc::Sender, time::Instant};
 
 use bitcoincore_rpc::bitcoin::absolute::{Height, LockTime};
@@ -13,6 +15,7 @@ pub async fn run(db_tx: Sender<DbRequest>, status_tx: status::Sender, client: Bi
     info!("Indexer started");
     let mut last_tip = 0;
     loop {
+        tokio::time::sleep(Duration::from_secs(10)).await;
         let blockchain_info = handle_result!(status_tx, client.get_blockchain_info());
         let tip_height = blockchain_info.blocks;
         for height in last_tip..tip_height {
@@ -25,13 +28,10 @@ pub async fn run(db_tx: Sender<DbRequest>, status_tx: status::Sender, client: Bi
                 if tx.output.len() != 2 {
                     continue;
                 }
-                let onion_address = tx
-                    .output
-                    .iter()
-                    .filter_map(|txout| {
-                        extract_onion_address_from_script(txout.script_pubkey.as_bytes())
-                    })
-                    .next();
+
+                let onion_address = tx.output.iter().find_map(|txout| {
+                    extract_onion_address_from_script(txout.script_pubkey.as_bytes())
+                });
 
                 if let Some(onion_address) = onion_address {
                     let server_info = ServerInfo {

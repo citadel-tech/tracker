@@ -1,12 +1,11 @@
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter},
-    net::TcpStream,
+    net::tcp::{ReadHalf, WriteHalf},
 };
 
 use crate::error::TrackerError;
 
-pub async fn read_message(reader: &mut TcpStream) -> Result<Vec<u8>, TrackerError> {
-    let mut reader = BufReader::new(reader);
+pub async fn read_message(reader: &mut BufReader<ReadHalf<'_>>) -> Result<Vec<u8>, TrackerError> {
     // length of incoming data
     let mut len_buff = [0u8; 4];
     reader.read_exact(&mut len_buff).await?;
@@ -19,16 +18,15 @@ pub async fn read_message(reader: &mut TcpStream) -> Result<Vec<u8>, TrackerErro
 }
 
 pub async fn send_message(
-    socket_writer: &mut TcpStream,
+    writer: &mut BufWriter<WriteHalf<'_>>,
     message: &impl serde::Serialize,
 ) -> Result<(), TrackerError> {
-    let mut writer = BufWriter::new(socket_writer);
-    let msg_bytes = serde_cbor::ser::to_vec(message).unwrap();
+    let msg_bytes = serde_cbor::ser::to_vec(message)?;
     let msg_len = (msg_bytes.len() as u32).to_be_bytes();
     let mut to_send = Vec::with_capacity(msg_bytes.len() + msg_len.len());
     to_send.extend(msg_len);
     to_send.extend(msg_bytes);
-    _ = writer.write_all(&to_send).await;
+    writer.write_all(&to_send).await?;
     writer.flush().await?;
     Ok(())
 }

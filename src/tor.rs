@@ -13,11 +13,11 @@ pub(crate) async fn check_tor_status(
     control_port: u16,
     password: &str,
 ) -> Result<(), TrackerError> {
-    let (reader, mut writer) = TcpStream::connect(format!("127.0.0.1:{}", control_port))
+    let (reader, mut writer) = TcpStream::connect(format!("127.0.0.1:{control_port}"))
         .await?
         .into_split();
     let mut reader = BufReader::new(reader);
-    let auth_command = format!("AUTHENTICATE \"{}\"\r\n", password);
+    let auth_command = format!("AUTHENTICATE \"{password}\"\r\n");
     writer.write_all(auth_command.as_bytes()).await?;
     let mut response = String::new();
     reader.read_line(&mut response).await?;
@@ -51,28 +51,24 @@ pub(crate) async fn get_emphemeral_address(
     private_key_data: Option<&str>,
     service_id_data: Option<&str>,
 ) -> Result<(String, String), TrackerError> {
-    let (reader, mut writer) = TcpStream::connect(format!("127.0.0.1:{}", control_port))
+    let (reader, mut writer) = TcpStream::connect(format!("127.0.0.1:{control_port}"))
         .await?
         .into_split();
     let mut reader = BufReader::new(reader);
     let mut response = String::new();
     let mut service_id = String::new();
     let mut private_key = String::new();
-    let auth_command = format!("AUTHENTICATE \"{}\"\r\n", password);
+    let auth_command = format!("AUTHENTICATE \"{password}\"\r\n");
     writer.write_all(auth_command.as_bytes()).await?;
     if let Some(service_id) = service_id_data {
-        let remove_command = format!("DEL_ONION {}\r\n", service_id);
+        let remove_command = format!("DEL_ONION {service_id}\r\n");
         writer.write_all(remove_command.as_bytes()).await?;
     }
-    let mut add_onion_command = format!(
-        "ADD_ONION NEW:BEST Flags=Detach Port={},127.0.0.1:{}\r\n",
-        target_port, target_port
-    );
+    let mut add_onion_command =
+        format!("ADD_ONION NEW:BEST Flags=Detach Port={target_port},127.0.0.1:{target_port}\r\n");
     if let Some(pk) = private_key_data {
-        add_onion_command = format!(
-            "ADD_ONION {} Flags=Detach Port={},127.0.0.1:{}\r\n",
-            pk, target_port, target_port
-        );
+        add_onion_command =
+            format!("ADD_ONION {pk} Flags=Detach Port={target_port},127.0.0.1:{target_port}\r\n");
         private_key = pk.to_string();
     }
     writer.write_all(add_onion_command.as_bytes()).await?;
@@ -101,7 +97,7 @@ pub(crate) async fn get_emphemeral_address(
             "Failed to retrieve ephemeral onion service details".to_string(),
         ));
     }
-    Ok((format!("{}.onion", service_id), private_key))
+    Ok((format!("{service_id}.onion"), private_key))
 }
 
 pub(crate) async fn get_tor_hostname(
@@ -112,32 +108,32 @@ pub(crate) async fn get_tor_hostname(
 ) -> Result<String, TrackerError> {
     let tor_config_path = data_dir.join("tor/hostname");
 
-    if tor_config_path.exists() {
-        if let Ok(tor_metadata) = fs::read(&tor_config_path).await {
-            let data: [&str; 2] = serde_cbor::de::from_slice(&tor_metadata)?;
+    if tor_config_path.exists()
+        && let Ok(tor_metadata) = fs::read(&tor_config_path).await
+    {
+        let data: [&str; 2] = serde_cbor::de::from_slice(&tor_metadata)?;
 
-            let hostname_data = data[1];
-            let private_key_data = data[0];
+        let hostname_data = data[1];
+        let private_key_data = data[0];
 
-            let (hostname, private_key) = get_emphemeral_address(
-                control_port,
-                target_port,
-                password,
-                Some(private_key_data),
-                Some(hostname_data.replace(".onion", "").as_str()),
-            )
-            .await?;
+        let (hostname, private_key) = get_emphemeral_address(
+            control_port,
+            target_port,
+            password,
+            Some(private_key_data),
+            Some(hostname_data.replace(".onion", "").as_str()),
+        )
+        .await?;
 
-            assert_eq!(hostname, hostname_data);
-            assert_eq!(private_key, private_key_data);
+        assert_eq!(hostname, hostname_data);
+        assert_eq!(private_key, private_key_data);
 
-            info!(
-                "Generated existing Tor Hidden Service Hostname: {}",
-                hostname
-            );
+        info!(
+            "Generated existing Tor Hidden Service Hostname: {}",
+            hostname
+        );
 
-            return Ok(hostname);
-        }
+        return Ok(hostname);
     }
 
     let (hostname, private_key) =
