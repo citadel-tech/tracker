@@ -54,7 +54,7 @@ pub struct DnsMetadata {
 
 #[derive(Serialize, Deserialize, Debug)]
 #[allow(clippy::large_enum_variant)]
-pub enum DnsRequest {
+pub enum TrackerRequest {
     /// A request sent by the maker to register itself with the DNS server and authenticate.
     Post {
         /// Metadata containing the maker's URL and fidelity proof.
@@ -67,7 +67,7 @@ pub enum DnsRequest {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub enum DnsResponse {
+pub enum TrackerResponse {
     Address { addresses: Vec<String> },
     Ping,
 }
