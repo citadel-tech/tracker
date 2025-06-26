@@ -80,7 +80,7 @@ async fn send_status(sender: &Sender, e: TrackerError, outcome: ErrorBranch) -> 
 pub async fn handle_error(sender: &Sender, e: TrackerError) -> ErrorBranch {
     match e {
         TrackerError::DbManagerExited => send_status(sender, e, ErrorBranch::Break).await,
-        TrackerError::MempoolIndexerError => send_status(sender, e, ErrorBranch::Break).await,
+        TrackerError::MempoolIndexerError => send_status(sender, e, ErrorBranch::Continue).await,
         TrackerError::ServerError => send_status(sender, e, ErrorBranch::Break).await,
         TrackerError::Shutdown => send_status(sender, e, ErrorBranch::Break).await,
         TrackerError::IOError(_) => send_status(sender, e, ErrorBranch::Break).await,
