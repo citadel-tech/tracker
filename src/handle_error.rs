@@ -4,7 +4,7 @@ macro_rules! handle_result {
         match $res {
             Ok(val) => val,
             Err(e) => {
-                let res = $crate::status::handle_error(&$sender, e.into());
+                let res = $crate::status::handle_error(&$sender, e.into()).await;
                 match res {
                     $crate::handle_error::ErrorBranch::Break => break,
                     $crate::handle_error::ErrorBranch::Continue => continue,

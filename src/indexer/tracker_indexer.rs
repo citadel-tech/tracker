@@ -1,6 +1,9 @@
-use std::sync::mpsc::Sender;
+use std::time::Duration;
+
+use tokio::{sync::mpsc::Sender, time::Instant};
 
 use bitcoincore_rpc::bitcoin::absolute::{Height, LockTime};
+use tracing::info;
 
 use super::rpc::BitcoinRpc;
 use crate::{
@@ -8,18 +11,13 @@ use crate::{
     types::{DbRequest, ServerInfo},
 };
 
-pub fn run(
-    _db_tx: Sender<DbRequest>,
-    status_tx: status::Sender,
-    url: String,
-    username: String,
-    password: String,
-) {
-    let client = BitcoinRpc::new(url, username, password).unwrap();
+pub async fn run(db_tx: Sender<DbRequest>, status_tx: status::Sender, client: BitcoinRpc) {
+    info!("Indexer started");
     let mut last_tip = 0;
     loop {
         let blockchain_info = handle_result!(status_tx, client.get_blockchain_info());
-        let tip_height = blockchain_info.blocks;
+        let tip_height = blockchain_info.blocks + 1;
+
         for height in last_tip..tip_height {
             let block_hash = handle_result!(status_tx, client.get_block_hash(height));
             let block = handle_result!(status_tx, client.get_block(block_hash));
@@ -27,28 +25,30 @@ pub fn run(
                 if tx.lock_time == LockTime::Blocks(Height::ZERO) {
                     continue;
                 }
-                if tx.output.len() != 2 {
+
+                if tx.output.len() < 2 {
                     continue;
                 }
-                let onion_address = tx
-                    .output
-                    .iter()
-                    .filter_map(|txout| {
-                        extract_onion_address_from_script(txout.script_pubkey.as_bytes())
-                    })
-                    .next();
+
+                let onion_address = tx.output.iter().find_map(|txout| {
+                    extract_onion_address_from_script(txout.script_pubkey.as_bytes())
+                });
 
                 if let Some(onion_address) = onion_address {
                     let server_info = ServerInfo {
                         onion_address: onion_address.clone(),
-                        rate: 0.0,
-                        uptime: 0,
+                        cooldown: Instant::now(),
+                        stale: false,
                     };
-                    let _ = DbRequest::Add(onion_address, server_info);
+                    info!("New address found: {:?}", onion_address);
+                    let db_request = DbRequest::Add(onion_address, server_info);
+
+                    handle_result!(status_tx, db_tx.send(db_request).await);
                 }
             }
         }
         last_tip = tip_height;
+        tokio::time::sleep(Duration::from_secs(10)).await;
     }
 }
 

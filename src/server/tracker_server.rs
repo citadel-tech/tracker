@@ -1,67 +1,101 @@
-use mio::{Events, Interest, Poll, Token, net::TcpStream};
-use std::collections::HashMap;
-use std::io::ErrorKind;
-use std::io::Read;
-use std::io::Write;
-use std::sync::mpsc;
-use std::sync::mpsc::Sender;
-
-use crate::handle_result;
+use crate::server::tracker_monitor::monitor_systems;
 use crate::status;
 use crate::types::DbRequest;
+use crate::types::TrackerRequest;
+use crate::types::TrackerResponse;
+use crate::utils::read_message;
+use crate::utils::send_message;
+use tokio::io::BufReader;
+use tokio::io::BufWriter;
+use tokio::net::TcpListener;
+use tokio::net::TcpStream;
+use tokio::sync::mpsc;
+use tokio::sync::mpsc::Sender;
+use tracing::error;
+use tracing::info;
 
-const SERVER: Token = Token(0);
+pub async fn run(
+    db_tx: Sender<DbRequest>,
+    status_tx: status::Sender,
+    address: String,
+    socks_port: u16,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let server = TcpListener::bind(&address).await?;
 
-pub fn run(db_tx: Sender<DbRequest>, status_tx: status::Sender) {
-    let addr = "127.0.0.1:8080".parse().unwrap();
-    let mut events = Events::with_capacity(1024);
-    let mut poll = Poll::new().unwrap();
-    let mut server = mio::net::TcpListener::bind(addr).expect("Port binding failed");
-    poll.registry()
-        .register(&mut server, SERVER, Interest::READABLE)
-        .expect("Couldn't register the file descriptors");
+    tokio::spawn(monitor_systems(
+        db_tx.clone(),
+        status_tx.clone(),
+        socks_port,
+    ));
 
-    let mut clients: HashMap<Token, TcpStream> = HashMap::new();
-    let mut unique_token = 1;
+    info!("Tracker server listening on {}", address);
+
+    while let Ok((stream, client_addr)) = server.accept().await {
+        info!("Accepted connection from {}", client_addr);
+        let db_tx_clone = db_tx.clone();
+        tokio::spawn(async move { handle_client(stream, db_tx_clone).await });
+    }
+
+    Ok(())
+}
+async fn handle_client(mut stream: TcpStream, db_tx: Sender<DbRequest>) {
+    let (read_half, write_half) = stream.split();
+    let mut reader = BufReader::new(read_half);
+    let mut writer = BufWriter::new(write_half);
 
     loop {
-        handle_result!(status_tx, poll.poll(&mut events, None));
-        let _ = events.iter().map(|e| match e.token() {
-            SERVER => {
-                if let Ok((mut connection, _)) = server.accept() {
-                    let token = Token(unique_token);
-                    unique_token += 1;
-                    poll.registry()
-                        .register(&mut connection, token, Interest::READABLE)
-                        .unwrap();
-                    clients.insert(token, connection);
-                }
+        let buffer = match read_message(&mut reader).await {
+            Ok(buf) => buf,
+            Err(e) if e.io_error_kind() == Some(std::io::ErrorKind::UnexpectedEof) => {
+                info!("Client disconnected.");
+                break;
             }
-            token => {
-                if let Some(client) = clients.get_mut(&token) {
-                    let mut buf = [0; 1024];
-                    match client.read(&mut buf) {
-                        Ok(0) => {
-                            clients.remove(&token);
-                        }
-                        Ok(n) => {
-                            let request = String::from_utf8_lossy(&buf[..n]);
-                            if request.contains("GET") {
-                                let (resp_tx, resp_rx) = mpsc::channel();
-                                let _ = db_tx.send(DbRequest::Query("asc".to_string(), resp_tx));
-                                if let Ok(server) = resp_rx.recv() {
-                                    let response = format!("{:?}", server);
-                                    let _ = client.write_all(response.as_bytes());
-                                }
-                            }
-                        }
-                        Err(e) if e.kind() == ErrorKind::WouldBlock => {}
-                        Err(_) => {
-                            clients.remove(&token);
-                        }
+            Err(e) => {
+                error!("Failed to read message: {}", e);
+                break;
+            }
+        };
+
+        let request: TrackerRequest = match serde_cbor::de::from_reader(&buffer[..]) {
+            Ok(r) => r,
+            Err(e) => {
+                error!("Failed to deserialize client request: {e}");
+                break;
+            }
+        };
+
+        match request {
+            TrackerRequest::Get => {
+                info!("Received Get request taker");
+                let (resp_tx, mut resp_rx) = mpsc::channel(1);
+                let db_request = DbRequest::QueryActive(resp_tx);
+
+                if let Err(e) = db_tx.send(db_request).await {
+                    error!("Failed to send DB request: {e}");
+                    break;
+                }
+
+                let response = resp_rx.recv().await;
+                info!("Response: {:?}", response);
+
+                if let Some(addresses) = response {
+                    let message = TrackerResponse::Address { addresses };
+                    if let Err(e) = send_message(&mut writer, &message).await {
+                        error!("Failed to send response to client: {e}");
+                        break;
                     }
                 }
             }
-        });
+
+            TrackerRequest::Post { metadata: _ } => {
+                todo!()
+            }
+
+            TrackerRequest::Pong { address: _ } => {
+                todo!()
+            }
+        }
     }
+
+    info!("Connection handler exiting.");
 }

@@ -42,3 +42,9 @@ impl BitcoinRpc {
         Ok(block)
     }
 }
+
+impl From<Client> for BitcoinRpc {
+    fn from(value: Client) -> Self {
+        BitcoinRpc { client: value }
+    }
+}
