@@ -12,7 +12,7 @@ pub async fn read_message(reader: &mut BufReader<ReadHalf<'_>>) -> Result<Vec<u8
     let length = u32::from_be_bytes(len_buff);
     let mut buffer = vec![0; length as usize];
 
-    _ = reader.read(&mut buffer[4..]).await?;
+    _ = reader.read(&mut buffer[..]).await?;
 
     Ok(buffer)
 }
