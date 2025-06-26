@@ -50,3 +50,27 @@ impl From<serde_cbor::Error> for TrackerError {
         Self::SerdeCbor(value)
     }
 }
+
+impl TrackerError {
+    pub fn io_error_kind(&self) -> Option<std::io::ErrorKind> {
+        match self {
+            TrackerError::IOError(e) => Some(e.kind()),
+            _ => None,
+        }
+    }
+
+    pub fn kind(&self) -> &'static str {
+        match self {
+            TrackerError::DbManagerExited => "DbManagerExited",
+            TrackerError::ServerError => "ServerError",
+            TrackerError::MempoolIndexerError => "MempoolIndexerError",
+            TrackerError::Shutdown => "Shutdown",
+            TrackerError::ParsingError => "ParsingError",
+            TrackerError::SendError => "SendError",
+            TrackerError::IOError(_) => "IOError",
+            TrackerError::RPCError(_) => "RPCError",
+            TrackerError::SerdeCbor(_) => "SerdeCbor",
+            TrackerError::General(_) => "General",
+        }
+    }
+}
