@@ -1,9 +1,8 @@
-use crate::handle_result;
 use crate::server::tracker_monitor::monitor_systems;
 use crate::status;
 use crate::types::DbRequest;
-use crate::types::DnsRequest;
-use crate::types::DnsResponse;
+use crate::types::TrackerRequest;
+use crate::types::TrackerResponse;
 use crate::utils::read_message;
 use crate::utils::send_message;
 use tokio::io::BufReader;
@@ -12,6 +11,7 @@ use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::Sender;
+use tracing::error;
 use tracing::info;
 
 pub async fn run(
@@ -32,43 +32,70 @@ pub async fn run(
 
     while let Ok((stream, client_addr)) = server.accept().await {
         info!("Accepted connection from {}", client_addr);
-        let status_tx_clone = status_tx.clone();
         let db_tx_clone = db_tx.clone();
-        tokio::spawn(async move { handle_client(stream, status_tx_clone, db_tx_clone).await });
+        tokio::spawn(async move { handle_client(stream, db_tx_clone).await });
     }
 
     Ok(())
 }
-
-async fn handle_client(mut stream: TcpStream, status_tx: status::Sender, db_tx: Sender<DbRequest>) {
+async fn handle_client(mut stream: TcpStream, db_tx: Sender<DbRequest>) {
     let (read_half, write_half) = stream.split();
-
     let mut reader = BufReader::new(read_half);
     let mut writer = BufWriter::new(write_half);
 
     loop {
-        let buffer = handle_result!(status_tx, read_message(&mut reader).await);
-        let request: DnsRequest =
-            handle_result!(status_tx, serde_cbor::de::from_reader(&buffer[..]));
+        let buffer = match read_message(&mut reader).await {
+            Ok(buf) => buf,
+            Err(e) if e.io_error_kind() == Some(std::io::ErrorKind::UnexpectedEof) => {
+                info!("Client disconnected.");
+                break;
+            }
+            Err(e) => {
+                error!("Failed to read message: {}", e);
+                break;
+            }
+        };
+
+        let request: TrackerRequest = match serde_cbor::de::from_reader(&buffer[..]) {
+            Ok(r) => r,
+            Err(e) => {
+                error!("Failed to deserialize client request: {e}");
+                break;
+            }
+        };
 
         match request {
-            DnsRequest::Get => {
+            TrackerRequest::Get => {
                 info!("Received Get request taker");
                 let (resp_tx, mut resp_rx) = mpsc::channel(1);
                 let db_request = DbRequest::QueryActive(resp_tx);
-                handle_result!(status_tx, db_tx.send(db_request).await);
+
+                if let Err(e) = db_tx.send(db_request).await {
+                    error!("Failed to send DB request: {e}");
+                    break;
+                }
+
                 let response = resp_rx.recv().await;
+                info!("Response: {:?}", response);
+
                 if let Some(addresses) = response {
-                    let message = DnsResponse::Address { addresses };
-                    _ = send_message(&mut writer, &message).await;
+                    let message = TrackerResponse::Address { addresses };
+                    if let Err(e) = send_message(&mut writer, &message).await {
+                        error!("Failed to send response to client: {e}");
+                        break;
+                    }
                 }
             }
-            DnsRequest::Post { metadata: _ } => {
+
+            TrackerRequest::Post { metadata: _ } => {
                 todo!()
             }
-            DnsRequest::Pong { address: _ } => {
+
+            TrackerRequest::Pong { address: _ } => {
                 todo!()
             }
         }
     }
+
+    info!("Connection handler exiting.");
 }
