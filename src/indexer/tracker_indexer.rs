@@ -15,9 +15,9 @@ pub async fn run(db_tx: Sender<DbRequest>, status_tx: status::Sender, client: Bi
     info!("Indexer started");
     let mut last_tip = 0;
     loop {
-        tokio::time::sleep(Duration::from_secs(10)).await;
         let blockchain_info = handle_result!(status_tx, client.get_blockchain_info());
-        let tip_height = blockchain_info.blocks;
+        let tip_height = blockchain_info.blocks + 1;
+
         for height in last_tip..tip_height {
             let block_hash = handle_result!(status_tx, client.get_block_hash(height));
             let block = handle_result!(status_tx, client.get_block(block_hash));
@@ -25,7 +25,8 @@ pub async fn run(db_tx: Sender<DbRequest>, status_tx: status::Sender, client: Bi
                 if tx.lock_time == LockTime::Blocks(Height::ZERO) {
                     continue;
                 }
-                if tx.output.len() != 2 {
+
+                if tx.output.len() < 2 {
                     continue;
                 }
 
@@ -47,6 +48,7 @@ pub async fn run(db_tx: Sender<DbRequest>, status_tx: status::Sender, client: Bi
             }
         }
         last_tip = tip_height;
+        tokio::time::sleep(Duration::from_secs(10)).await;
     }
 }
 
