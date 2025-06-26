@@ -6,18 +6,20 @@ use tokio::{
     time::{Instant, sleep},
 };
 use tokio_socks::tcp::Socks5Stream;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 use crate::{
     error::TrackerError,
-    handle_result, status,
-    types::{DbRequest, DnsRequest, DnsResponse, ServerInfo},
-    utils::{read_message, send_message},
+    handle_result,
+    server::send_message_with_prefix,
+    status,
+    types::{DbRequest, ServerInfo, TrackerRequest, TrackerResponse},
+    utils::read_message,
 };
 
 use tokio::io::BufReader;
 
-const COOLDOWN_PERIOD: u64 = 5 * 60;
+const COOLDOWN_PERIOD: u64 = 5;
 pub async fn monitor_systems(
     db_tx: Sender<DbRequest>,
     status_tx: status::Sender,
@@ -26,8 +28,6 @@ pub async fn monitor_systems(
     info!("Starting to monitor other maker services");
 
     loop {
-        sleep(Duration::from_secs(1000)).await;
-
         let (response_tx, mut response_rx) = tokio::sync::mpsc::channel(1);
         if db_tx.send(DbRequest::QueryAll(response_tx)).await.is_err() {
             continue;
@@ -39,6 +39,7 @@ pub async fn monitor_systems(
                 if server_info.cooldown.elapsed() <= cooldown_duration {
                     continue;
                 }
+                info!("Address to query: {:?}", address);
 
                 let mut success = false;
                 for attempt in 1..=3 {
@@ -58,14 +59,21 @@ pub async fn monitor_systems(
 
                             let mut writer = BufWriter::new(write_half);
 
-                            let message = DnsResponse::Ping;
-                            _ = send_message(&mut writer, &message).await;
+                            let message = TrackerResponse::Ping;
+                            _ = send_message_with_prefix(&mut writer, &message).await;
 
                             let buffer = handle_result!(status_tx, read_message(&mut reader).await);
-                            let response: DnsRequest =
-                                handle_result!(status_tx, serde_cbor::de::from_reader(&buffer[..]));
+                            let response: TrackerRequest =
+                                match serde_cbor::de::from_reader(&buffer[..]) {
+                                    Ok(resp) => resp,
+                                    Err(e) => {
+                                        error!("Deserialization error: {e:?}");
+                                        sleep(Duration::from_secs(1)).await;
+                                        continue;
+                                    }
+                                };
 
-                            if let DnsRequest::Pong { address } = response {
+                            if let TrackerRequest::Pong { address } = response {
                                 let updated_info = ServerInfo {
                                     onion_address: address.clone(),
                                     cooldown: Instant::now(),
@@ -95,6 +103,7 @@ pub async fn monitor_systems(
                     let _ = db_tx.send(DbRequest::Update(address, updated_info)).await;
                 }
             }
+            sleep(Duration::from_secs(4)).await;
         }
     }
 }
