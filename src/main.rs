@@ -1,10 +1,14 @@
 #![allow(dead_code)]
 use std::path::Path;
+use std::sync::Arc;
 
 use bitcoincore_rpc::Auth;
 use bitcoincore_rpc::Client;
 use clap::Parser;
+use diesel::r2d2::ConnectionManager;
+use diesel::SqliteConnection;
 use error::TrackerError;
+use r2d2::Pool;
 use status::{State, Status};
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tor::check_tor_status;
@@ -30,7 +34,7 @@ struct App {
         name = "ADDRESS:PORT",
         long,
         short = 'r',
-        default_value = "127.0.0.1:48332"
+        default_value = "127.0.0.1:18443"
     )]
     pub(crate) rpc: String,
     #[clap(
@@ -111,6 +115,13 @@ async fn main() {
 
     let rpc_config = RPCConfig::new(args.rpc, Auth::UserPass(args.auth.0, args.auth.1));
 
+    info!("Connecting to indexer db");
+    let database_url = format!("{}/tracker.db", args.datadir);
+    let manager = ConnectionManager::<SqliteConnection>::new(database_url);
+    let pool = Arc::new(Pool::builder().build(manager).expect("Failed to create DB pool"));
+    info!("Connected to indexer db");
+
+
     check_tor_status(args.control_port, &args.tor_auth_password)
         .await
         .expect("Failed to check Tor status");
@@ -140,7 +151,7 @@ async fn main() {
 
     let server_address = args.address.clone();
 
-    spawn_db_manager(db_rx, status_tx.clone()).await;
+    spawn_db_manager(pool.clone(), db_rx, status_tx.clone()).await;
     spawn_mempool_indexer(db_tx.clone(), status_tx.clone(), rpc_config.clone().into()).await;
     spawn_server(
         db_tx.clone(),
@@ -161,7 +172,7 @@ async fn main() {
                 );
                 let (new_db_tx, new_db_rx) = mpsc::channel::<DbRequest>(10);
                 db_tx = new_db_tx;
-                spawn_db_manager(new_db_rx, status_tx.clone()).await;
+                spawn_db_manager(pool.clone(), new_db_rx, status_tx.clone()).await;
             }
             State::Healthy(info) => {
                 info!("System healthy: {:?}", info);
@@ -185,9 +196,9 @@ async fn main() {
     }
 }
 
-async fn spawn_db_manager(db_tx: Receiver<DbRequest>, status_tx: Sender<Status>) {
+async fn spawn_db_manager(pool: Arc<Pool<ConnectionManager<SqliteConnection>>>,db_tx: Receiver<DbRequest>, status_tx: Sender<Status>) {
     info!("Spawning db manager");
-    tokio::spawn(db::run(db_tx, status::Sender::DBManager(status_tx)));
+    tokio::spawn(db::run(pool, db_tx, status::Sender::DBManager(status_tx)));
 }
 
 async fn spawn_mempool_indexer(
