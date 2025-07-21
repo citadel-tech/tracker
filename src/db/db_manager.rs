@@ -1,6 +1,6 @@
-use std::{collections::HashMap, sync::Arc};
-use diesel::{r2d2::ConnectionManager, SqliteConnection};
+use diesel::{SqliteConnection, r2d2::ConnectionManager};
 use r2d2::Pool;
+use std::{collections::HashMap, sync::Arc};
 use tokio::sync::mpsc::Receiver;
 use tracing::info;
 
@@ -10,7 +10,11 @@ use crate::{
     types::{DbRequest, ServerInfo},
 };
 
-pub async fn run(pool: Arc<Pool<ConnectionManager<SqliteConnection>>>, mut rx: Receiver<DbRequest>, status_tx: status::Sender) {
+pub async fn run(
+    pool: Arc<Pool<ConnectionManager<SqliteConnection>>>,
+    mut rx: Receiver<DbRequest>,
+    status_tx: status::Sender,
+) {
     let mut servers: HashMap<String, ServerInfo> = HashMap::new();
     info!("DB manager started");
     while let Some(request) = rx.recv().await {

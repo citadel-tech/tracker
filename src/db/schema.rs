@@ -39,9 +39,4 @@ diesel::table! {
 
 diesel::joinable!(mempool_inputs -> mempool_tx (txid));
 
-diesel::allow_tables_to_appear_in_same_query!(
-    mempool_inputs,
-    mempool_tx,
-    servers,
-    utxos,
-);
+diesel::allow_tables_to_appear_in_same_query!(mempool_inputs, mempool_tx, servers, utxos,);

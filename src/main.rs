@@ -5,8 +5,8 @@ use std::sync::Arc;
 use bitcoincore_rpc::Auth;
 use bitcoincore_rpc::Client;
 use clap::Parser;
-use diesel::r2d2::ConnectionManager;
 use diesel::SqliteConnection;
+use diesel::r2d2::ConnectionManager;
 use error::TrackerError;
 use r2d2::Pool;
 use status::{State, Status};
@@ -118,9 +118,12 @@ async fn main() {
     info!("Connecting to indexer db");
     let database_url = format!("{}/tracker.db", args.datadir);
     let manager = ConnectionManager::<SqliteConnection>::new(database_url);
-    let pool = Arc::new(Pool::builder().build(manager).expect("Failed to create DB pool"));
+    let pool = Arc::new(
+        Pool::builder()
+            .build(manager)
+            .expect("Failed to create DB pool"),
+    );
     info!("Connected to indexer db");
-
 
     check_tor_status(args.control_port, &args.tor_auth_password)
         .await
@@ -196,7 +199,11 @@ async fn main() {
     }
 }
 
-async fn spawn_db_manager(pool: Arc<Pool<ConnectionManager<SqliteConnection>>>,db_tx: Receiver<DbRequest>, status_tx: Sender<Status>) {
+async fn spawn_db_manager(
+    pool: Arc<Pool<ConnectionManager<SqliteConnection>>>,
+    db_tx: Receiver<DbRequest>,
+    status_tx: Sender<Status>,
+) {
     info!("Spawning db manager");
     tokio::spawn(db::run(pool, db_tx, status::Sender::DBManager(status_tx)));
 }
