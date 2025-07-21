@@ -1,4 +1,4 @@
 mod db_manager;
 pub use db_manager::run;
-mod model;
-mod schema;
+pub mod model;
+pub mod schema;
