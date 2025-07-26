@@ -1,10 +1,13 @@
-use diesel::{SqliteConnection, r2d2::ConnectionManager};
+use crate::db::model::MempoolTx;
+use diesel::RunQueryDsl;
+use diesel::{ExpressionMethods, JoinOnDsl, QueryDsl, SqliteConnection, r2d2::ConnectionManager};
 use r2d2::Pool;
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::mpsc::Receiver;
 use tracing::info;
 
 use crate::{
+    db::schema::{mempool_inputs, mempool_tx},
     error::TrackerError,
     status::{self, Status},
     types::{DbRequest, ServerInfo},
@@ -16,6 +19,7 @@ pub async fn run(
     status_tx: status::Sender,
 ) {
     let mut servers: HashMap<String, ServerInfo> = HashMap::new();
+    let mut conn = pool.get().unwrap();
     info!("DB manager started");
     while let Some(request) = rx.recv().await {
         match request {
@@ -46,6 +50,19 @@ pub async fn run(
                     .map(|e| e.0.clone())
                     .collect();
                 let _ = resp_tx.send(response).await;
+            }
+            DbRequest::WatchUtxo(outpoint, resp_tx) => {
+                info!("Watch utxo intercepted");
+
+                let mempool_tx = mempool_tx::table
+                    .inner_join(mempool_inputs::table.on(mempool_tx::txid.eq(mempool_inputs::txid)))
+                    .filter(mempool_inputs::input_txid.eq(outpoint.txid.to_string()))
+                    .filter(mempool_inputs::input_vout.eq(outpoint.vout as i32))
+                    .select((mempool_tx::txid, mempool_tx::seen_at))
+                    .load::<MempoolTx>(&mut conn)
+                    .unwrap();
+
+                let _ = resp_tx.send(mempool_tx).await;
             }
         }
     }

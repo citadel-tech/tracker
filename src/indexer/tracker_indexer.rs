@@ -1,5 +1,7 @@
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
+use diesel::{SqliteConnection, r2d2::ConnectionManager};
+use r2d2::Pool;
 use tokio::{sync::mpsc::Sender, time::Instant};
 
 use bitcoincore_rpc::bitcoin::absolute::{Height, LockTime};
@@ -7,18 +9,28 @@ use tracing::info;
 
 use super::rpc::BitcoinRpc;
 use crate::{
-    handle_result, status,
+    handle_result,
+    indexer::utxo_indexer::Indexer,
+    status,
     types::{DbRequest, ServerInfo},
 };
 
-pub async fn run(db_tx: Sender<DbRequest>, status_tx: status::Sender, client: BitcoinRpc) {
+pub async fn run(
+    pool: Arc<Pool<ConnectionManager<SqliteConnection>>>,
+    db_tx: Sender<DbRequest>,
+    status_tx: status::Sender,
+    client: BitcoinRpc,
+) {
     info!("Indexer started");
+    let mut utxo_indexer = Indexer::new(pool, &client);
     let mut last_tip = 0;
     loop {
         let blockchain_info = handle_result!(status_tx, client.get_blockchain_info());
         let tip_height = blockchain_info.blocks + 1;
+        utxo_indexer.process_mempool();
 
         for height in last_tip..tip_height {
+            utxo_indexer.process_block(height);
             let block_hash = handle_result!(status_tx, client.get_block_hash(height));
             let block = handle_result!(status_tx, client.get_block(block_hash));
             for tx in block.txdata {

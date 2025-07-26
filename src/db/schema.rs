@@ -11,7 +11,7 @@ diesel::table! {
 
 diesel::table! {
     mempool_tx (txid) {
-        txid -> Nullable<Text>,
+        txid -> Text,
         seen_at -> Timestamp,
     }
 }

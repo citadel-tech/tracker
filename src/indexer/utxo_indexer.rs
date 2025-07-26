@@ -1,22 +1,27 @@
-use chrono::NaiveDateTime;
-use diesel::prelude::*;
-use diesel::SqliteConnection;
-use crate::db::schema::{mempool_inputs, mempool_tx, utxos};
+use std::sync::Arc;
+
 use crate::db::model::{MempoolInput, MempoolTx, Utxo};
+use crate::db::schema::{mempool_inputs, mempool_tx, utxos};
 use crate::indexer::rpc::BitcoinRpc;
+use chrono::NaiveDateTime;
+use diesel::SqliteConnection;
+use diesel::prelude::*;
+use diesel::r2d2::ConnectionManager;
+use r2d2::Pool;
 
 pub struct Indexer<'a> {
-    conn: &'a mut SqliteConnection,
+    conn: Arc<Pool<ConnectionManager<SqliteConnection>>>,
     rpc: &'a BitcoinRpc,
 }
 
 impl<'a> Indexer<'a> {
-    pub fn new(conn: &'a mut SqliteConnection, rpc: &'a BitcoinRpc) -> Self {
+    pub fn new(conn: Arc<Pool<ConnectionManager<SqliteConnection>>>, rpc: &'a BitcoinRpc) -> Self {
         Self { conn, rpc }
     }
 
     pub fn process_mempool(&mut self) {
         let txids = self.rpc.get_raw_mempool().unwrap();
+        let mut conn = self.conn.get().expect("Failed to get DB connection");
 
         for txid in txids {
             let tx = self.rpc.get_raw_tx(&txid).unwrap();
@@ -31,10 +36,15 @@ impl<'a> Indexer<'a> {
                         input_txid: prevout.txid.to_string(),
                         input_vout: prevout.vout as i32,
                     })
-                    .execute(self.conn).unwrap();
+                    .execute(&mut conn)
+                    .unwrap();
 
-                self.mark_utxo_spent(&txid.to_string(), prevout.vout as i32, Some(&txid.to_string()), false);
-                
+                self.mark_utxo_spent(
+                    &txid.to_string(),
+                    prevout.vout as i32,
+                    Some(&txid.to_string()),
+                    false,
+                );
             }
 
             for (vout, out) in tx.output.iter().enumerate() {
@@ -50,19 +60,26 @@ impl<'a> Indexer<'a> {
                 };
                 diesel::insert_or_ignore_into(utxos::table)
                     .values(&utxo)
-                    .execute(self.conn).unwrap();
+                    .execute(&mut conn)
+                    .unwrap();
             }
         }
     }
 
     pub fn process_block(&mut self, height: u64) {
         let block_hash = self.rpc.get_block_hash(height).unwrap();
-        let block =  self.rpc.get_block(block_hash).unwrap();
+        let block = self.rpc.get_block(block_hash).unwrap();
+        let mut conn = self.conn.get().expect("Failed to get DB connection");
 
         for tx in block.txdata.iter() {
             for input in &tx.input {
                 let prevout = &input.previous_output;
-                 self.mark_utxo_spent(&prevout.txid.to_string(), prevout.vout as i32, Some(&tx.compute_txid().to_string()), true);   
+                self.mark_utxo_spent(
+                    &prevout.txid.to_string(),
+                    prevout.vout as i32,
+                    Some(&tx.compute_txid().to_string()),
+                    true,
+                );
             }
 
             for (vout, out) in tx.output.iter().enumerate() {
@@ -78,18 +95,21 @@ impl<'a> Indexer<'a> {
                 };
                 diesel::insert_or_ignore_into(utxos::table)
                     .values(&utxo)
-                    .execute(self.conn).unwrap();
+                    .execute(&mut conn)
+                    .unwrap();
             }
         }
     }
 
     fn insert_mempool_tx(&mut self, txid: &str) {
+        let mut conn = self.conn.get().expect("Failed to get DB connection");
         diesel::insert_or_ignore_into(mempool_tx::table)
             .values(&MempoolTx {
                 txid: txid.to_string(),
                 seen_at: NaiveDateTime::MIN,
             })
-            .execute(self.conn).unwrap();
+            .execute(&mut conn)
+            .unwrap();
     }
 
     fn mark_utxo_spent(
@@ -98,8 +118,9 @@ impl<'a> Indexer<'a> {
         vout: i32,
         spent_by: Option<&str>,
         is_confirmed_spend: bool,
-    ){
+    ) {
         use utxos::dsl;
+        let mut conn = self.conn.get().expect("Failed to get DB connection");
 
         let confirmed_value = is_confirmed_spend;
 
@@ -109,7 +130,7 @@ impl<'a> Indexer<'a> {
                 dsl::spent_by_txid.eq(spent_by.map(str::to_string)),
                 dsl::confirmed.eq(confirmed_value),
             ))
-            .execute(self.conn).unwrap();
-
+            .execute(&mut conn)
+            .unwrap();
     }
 }

@@ -1,3 +1,4 @@
+use crate::db::model::MempoolTx;
 use crate::server::tracker_monitor::monitor_systems;
 use crate::status;
 use crate::types::DbRequest;
@@ -93,6 +94,29 @@ async fn handle_client(mut stream: TcpStream, db_tx: Sender<DbRequest>) {
 
             TrackerRequest::Pong { address: _ } => {
                 todo!()
+            }
+            TrackerRequest::Watch { outpoint } => {
+                info!("Received a watch request from client: {outpoint:?}");
+
+                let (resp_tx, mut resp_rx) = mpsc::channel::<Vec<MempoolTx>>(1);
+
+                let db_request = DbRequest::WatchUtxo(outpoint, resp_tx);
+
+                if let Err(e) = db_tx.send(db_request).await {
+                    error!("Failed to send DB request: {e}");
+                    break;
+                }
+
+                let response = resp_rx.recv().await;
+                info!("Response: {:?}", response);
+
+                if let Some(mempool_tx) = response {
+                    let message = TrackerResponse::WatchResponse { mempool_tx };
+                    if let Err(e) = send_message(&mut writer, &message).await {
+                        error!("Failed to send response to client: {e}");
+                        break;
+                    }
+                }
             }
         }
     }

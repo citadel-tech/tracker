@@ -107,6 +107,18 @@ impl From<RPCConfig> for Client {
     }
 }
 
+use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
+
+pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!();
+
+fn run_migrations(pool: Arc<Pool<ConnectionManager<SqliteConnection>>>) {
+    let mut conn = pool
+        .get()
+        .expect("Failed to get DB connection for migrations");
+    conn.run_pending_migrations(MIGRATIONS)
+        .expect("Migration failed");
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
@@ -117,12 +129,16 @@ async fn main() {
 
     info!("Connecting to indexer db");
     let database_url = format!("{}/tracker.db", args.datadir);
+    if let Some(parent) = Path::new(&database_url).parent() {
+        std::fs::create_dir_all(parent).expect("Failed to create database directory");
+    }
     let manager = ConnectionManager::<SqliteConnection>::new(database_url);
     let pool = Arc::new(
         Pool::builder()
             .build(manager)
             .expect("Failed to create DB pool"),
     );
+    run_migrations(pool.clone());
     info!("Connected to indexer db");
 
     check_tor_status(args.control_port, &args.tor_auth_password)
@@ -155,7 +171,13 @@ async fn main() {
     let server_address = args.address.clone();
 
     spawn_db_manager(pool.clone(), db_rx, status_tx.clone()).await;
-    spawn_mempool_indexer(db_tx.clone(), status_tx.clone(), rpc_config.clone().into()).await;
+    spawn_mempool_indexer(
+        pool.clone(),
+        db_tx.clone(),
+        status_tx.clone(),
+        rpc_config.clone().into(),
+    )
+    .await;
     spawn_server(
         db_tx.clone(),
         status_tx.clone(),
@@ -183,7 +205,7 @@ async fn main() {
             State::MempoolShutdown(err) => {
                 warn!("Mempool Indexer crashed. Restarting... Error: {:?}", err);
                 let client: Client = rpc_config.clone().into();
-                spawn_mempool_indexer(db_tx.clone(), status_tx.clone(), client).await;
+                spawn_mempool_indexer(pool.clone(), db_tx.clone(), status_tx.clone(), client).await;
             }
             State::ServerShutdown(err) => {
                 warn!("Server crashed. Restarting... Error: {:?}", err);
@@ -209,12 +231,14 @@ async fn spawn_db_manager(
 }
 
 async fn spawn_mempool_indexer(
+    pool: Arc<Pool<ConnectionManager<SqliteConnection>>>,
     db_tx: Sender<DbRequest>,
     status_tx: Sender<Status>,
     client: Client,
 ) {
     info!("Spawning indexer");
     tokio::spawn(indexer::run(
+        pool,
         db_tx,
         status::Sender::Mempool(status_tx),
         client.into(),

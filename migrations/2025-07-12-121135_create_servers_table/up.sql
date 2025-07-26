@@ -19,7 +19,7 @@ CREATE TABLE utxos (
 
 
 CREATE TABLE mempool_tx (
-    txid TEXT PRIMARY KEY,
+    txid TEXT PRIMARY KEY NOT NULL,
     seen_at TIMESTAMP NOT NULL
 );
 
