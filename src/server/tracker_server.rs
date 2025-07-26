@@ -2,8 +2,8 @@ use crate::db::model::MempoolTx;
 use crate::server::tracker_monitor::monitor_systems;
 use crate::status;
 use crate::types::DbRequest;
-use crate::types::TrackerRequest;
-use crate::types::TrackerResponse;
+use crate::types::TrackerClientToServer;
+use crate::types::TrackerServerToClient;
 use crate::utils::read_message;
 use crate::utils::send_message;
 use tokio::io::BufReader;
@@ -57,7 +57,7 @@ async fn handle_client(mut stream: TcpStream, db_tx: Sender<DbRequest>) {
             }
         };
 
-        let request: TrackerRequest = match serde_cbor::de::from_reader(&buffer[..]) {
+        let request: TrackerClientToServer = match serde_cbor::de::from_reader(&buffer[..]) {
             Ok(r) => r,
             Err(e) => {
                 error!("Failed to deserialize client request: {e}");
@@ -66,7 +66,7 @@ async fn handle_client(mut stream: TcpStream, db_tx: Sender<DbRequest>) {
         };
 
         match request {
-            TrackerRequest::Get => {
+            TrackerClientToServer::Get => {
                 info!("Received Get request taker");
                 let (resp_tx, mut resp_rx) = mpsc::channel(1);
                 let db_request = DbRequest::QueryActive(resp_tx);
@@ -80,7 +80,7 @@ async fn handle_client(mut stream: TcpStream, db_tx: Sender<DbRequest>) {
                 info!("Response: {:?}", response);
 
                 if let Some(addresses) = response {
-                    let message = TrackerResponse::Address { addresses };
+                    let message = TrackerServerToClient::Address { addresses };
                     if let Err(e) = send_message(&mut writer, &message).await {
                         error!("Failed to send response to client: {e}");
                         break;
@@ -88,14 +88,14 @@ async fn handle_client(mut stream: TcpStream, db_tx: Sender<DbRequest>) {
                 }
             }
 
-            TrackerRequest::Post { metadata: _ } => {
+            TrackerClientToServer::Post { metadata: _ } => {
                 todo!()
             }
 
-            TrackerRequest::Pong { address: _ } => {
+            TrackerClientToServer::Pong { address: _ } => {
                 todo!()
             }
-            TrackerRequest::Watch { outpoint } => {
+            TrackerClientToServer::Watch { outpoint } => {
                 info!("Received a watch request from client: {outpoint:?}");
 
                 let (resp_tx, mut resp_rx) = mpsc::channel::<Vec<MempoolTx>>(1);
@@ -111,7 +111,7 @@ async fn handle_client(mut stream: TcpStream, db_tx: Sender<DbRequest>) {
                 info!("Response: {:?}", response);
 
                 if let Some(mempool_tx) = response {
-                    let message = TrackerResponse::WatchResponse { mempool_tx };
+                    let message = TrackerServerToClient::WatchResponse { mempool_tx };
                     if let Err(e) = send_message(&mut writer, &message).await {
                         error!("Failed to send response to client: {e}");
                         break;
