@@ -13,7 +13,7 @@ use crate::{
     handle_result,
     server::send_message_with_prefix,
     status,
-    types::{DbRequest, ServerInfo, TrackerRequest, TrackerResponse},
+    types::{DbRequest, ServerInfo, TrackerClientToServer, TrackerServerToClient},
     utils::read_message,
 };
 
@@ -24,6 +24,8 @@ pub async fn monitor_systems(
     db_tx: Sender<DbRequest>,
     status_tx: status::Sender,
     socks_port: u16,
+    onion_address: String,
+    port: u16,
 ) -> Result<(), TrackerError> {
     info!("Starting to monitor other maker services");
 
@@ -59,11 +61,14 @@ pub async fn monitor_systems(
 
                             let mut writer = BufWriter::new(write_half);
 
-                            let message = TrackerResponse::Ping;
+                            let message = TrackerServerToClient::Ping {
+                                address: onion_address.clone(),
+                                port,
+                            };
                             _ = send_message_with_prefix(&mut writer, &message).await;
 
                             let buffer = handle_result!(status_tx, read_message(&mut reader).await);
-                            let response: TrackerRequest =
+                            let response: TrackerClientToServer =
                                 match serde_cbor::de::from_reader(&buffer[..]) {
                                     Ok(resp) => resp,
                                     Err(e) => {
@@ -73,7 +78,7 @@ pub async fn monitor_systems(
                                     }
                                 };
 
-                            if let TrackerRequest::Pong { address } = response {
+                            if let TrackerClientToServer::Pong { address } = response {
                                 let updated_info = ServerInfo {
                                     onion_address: address.clone(),
                                     cooldown: Instant::now(),

@@ -5,6 +5,8 @@ use bitcoincore_rpc::bitcoin::{
 use serde::{Deserialize, Serialize};
 use tokio::{sync::mpsc::Sender, time::Instant};
 
+use crate::db::model::MempoolTx;
+
 #[derive(Debug, Clone)]
 pub struct ServerInfo {
     pub onion_address: String,
@@ -18,6 +20,7 @@ pub enum DbRequest {
     Update(String, ServerInfo),
     QueryAll(Sender<Vec<(String, ServerInfo)>>),
     QueryActive(Sender<Vec<String>>),
+    WatchUtxo(OutPoint, Sender<Vec<MempoolTx>>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, PartialOrd, Hash)]
@@ -54,7 +57,7 @@ pub struct DnsMetadata {
 
 #[derive(Serialize, Deserialize, Debug)]
 #[allow(clippy::large_enum_variant)]
-pub enum TrackerRequest {
+pub enum TrackerClientToServer {
     /// A request sent by the maker to register itself with the DNS server and authenticate.
     Post {
         /// Metadata containing the maker's URL and fidelity proof.
@@ -63,11 +66,17 @@ pub enum TrackerRequest {
     /// A request sent by the taker to fetch all valid maker addresses from the DNS server.
     Get,
     /// To gauge server activity
-    Pong { address: String },
+    Pong {
+        address: String,
+    },
+    Watch {
+        outpoint: OutPoint,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub enum TrackerResponse {
+pub enum TrackerServerToClient {
     Address { addresses: Vec<String> },
-    Ping,
+    Ping { address: String, port: u16 },
+    WatchResponse { mempool_tx: Vec<MempoolTx> },
 }
