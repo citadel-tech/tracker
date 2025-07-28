@@ -20,13 +20,20 @@ pub async fn run(
     status_tx: status::Sender,
     address: String,
     socks_port: u16,
+    onion_address: String,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let port = address
+        .rsplit_once(':')
+        .and_then(|(_, port)| port.parse::<u16>().ok())
+        .unwrap_or(8080);
     let server = TcpListener::bind(&address).await?;
 
     tokio::spawn(monitor_systems(
         db_tx.clone(),
         status_tx.clone(),
         socks_port,
+        onion_address,
+        port,
     ));
 
     info!("Tracker server listening on {}", address);

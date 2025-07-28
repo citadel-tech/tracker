@@ -183,6 +183,7 @@ async fn main() {
         status_tx.clone(),
         server_address.clone(),
         args.socks_port,
+        hostname.clone(),
     )
     .await;
 
@@ -214,6 +215,7 @@ async fn main() {
                     status_tx.clone(),
                     server_address.clone(),
                     args.socks_port,
+                    hostname.clone(),
                 )
                 .await;
             }
@@ -250,6 +252,7 @@ async fn spawn_server(
     status_tx: Sender<Status>,
     address: String,
     socks_port: u16,
+    hostname: String,
 ) {
     info!("Spawning server instance");
     tokio::spawn(server::run(
@@ -257,5 +260,6 @@ async fn spawn_server(
         status::Sender::Server(status_tx),
         address,
         socks_port,
+        hostname,
     ));
 }

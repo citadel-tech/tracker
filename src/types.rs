@@ -77,6 +77,6 @@ pub enum TrackerClientToServer {
 #[derive(Serialize, Deserialize, Debug)]
 pub enum TrackerServerToClient {
     Address { addresses: Vec<String> },
-    Ping,
+    Ping { address: String, port: u16 },
     WatchResponse { mempool_tx: Vec<MempoolTx> },
 }
