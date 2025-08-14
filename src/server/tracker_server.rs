@@ -19,7 +19,7 @@ pub async fn run(
     db_tx: Sender<DbRequest>,
     status_tx: status::Sender,
     address: String,
-    socks_port: u16,
+    #[cfg(not(feature = "integration-test"))] socks_port: u16,
     onion_address: String,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let port = address
@@ -31,6 +31,7 @@ pub async fn run(
     tokio::spawn(monitor_systems(
         db_tx.clone(),
         status_tx.clone(),
+        #[cfg(not(feature = "integration-test"))]
         socks_port,
         onion_address,
         port,

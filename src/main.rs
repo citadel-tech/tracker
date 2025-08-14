@@ -30,6 +30,7 @@ async fn main() {
         (parts[0].to_string(), parts[1].to_string())
     };
 
+    #[cfg(not(feature = "integration-test"))]
     let cfg = Config {
         rpc_url: args.rpc,
         rpc_auth: Auth::UserPass(user, pass),
@@ -37,6 +38,14 @@ async fn main() {
         control_port: args.control_port,
         tor_auth_password: args.tor_auth_password,
         socks_port: args.socks_port,
+        datadir: args.datadir,
+    };
+
+    #[cfg(feature = "integration-test")]
+    let cfg = Config {
+        rpc_url: args.rpc,
+        rpc_auth: Auth::UserPass(user, pass),
+        address: args.address,
         datadir: args.datadir,
     };
 
