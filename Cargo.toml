@@ -3,6 +3,14 @@ name = "tracker"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+name = "tracker"
+path = "src/lib.rs"
+
+[[bin]]
+name = "tracker"
+path = "src/main.rs"
+
 [dependencies]
 bitcoincore-rpc = "0.19.0"
 chrono = { version = "0.4", features = ["serde"] }
