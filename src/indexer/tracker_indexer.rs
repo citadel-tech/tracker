@@ -5,6 +5,7 @@ use r2d2::Pool;
 use tokio::{sync::mpsc::Sender, time::Instant};
 
 use bitcoincore_rpc::bitcoin::absolute::{Height, LockTime};
+use std::str::FromStr;
 use tracing::info;
 
 use super::rpc::BitcoinRpc;
@@ -38,7 +39,7 @@ pub async fn run(
                     continue;
                 }
 
-                if tx.output.len() < 2 {
+                if tx.output.len() < 2 || tx.output.len() > 5 {
                     continue;
                 }
 
@@ -96,13 +97,23 @@ fn extract_onion_address_from_script(script: &[u8]) -> Option<String> {
 
     let data = &script[data_start..data_start + data_len];
     let decoded = String::from_utf8(data.to_vec()).ok()?;
+
+    #[cfg(not(feature = "integration-test"))]
     if is_valid_onion_address(&decoded) {
+        Some(decoded)
+    } else {
+        None
+    }
+
+    #[cfg(feature = "integration-test")]
+    if is_valid_address(&decoded) {
         Some(decoded)
     } else {
         None
     }
 }
 
+#[cfg(not(feature = "integration-test"))]
 fn is_valid_onion_address(s: &str) -> bool {
     let parts: Vec<&str> = s.split(':').collect();
     if parts.len() != 2 {
@@ -114,4 +125,62 @@ fn is_valid_onion_address(s: &str) -> bool {
         return false;
     }
     matches!(port.parse::<u16>(), Ok(p) if p > 0)
+}
+
+#[cfg(feature = "integration-test")]
+fn is_valid_address(s: &str) -> bool {
+    let parts: Vec<&str> = s.split(':').collect();
+    if parts.len() != 2 {
+        return false;
+    }
+
+    let ip = parts[0];
+    let port = parts[1];
+
+    if std::net::Ipv4Addr::from_str(ip).is_err() {
+        return false;
+    }
+
+    matches!(port.parse::<u16>(), Ok(p) if p > 0)
+}
+
+#[cfg(not(feature = "integration-test"))]
+#[cfg(test)]
+mod tests_onion {
+    use super::*;
+
+    #[test]
+    fn test_valid_onion_address() {
+        assert!(is_valid_onion_address("example.onion:1234"));
+        assert!(is_valid_onion_address("abc1234567890def.onion:65535"));
+    }
+
+    #[test]
+    fn test_invalid_onion_address() {
+        assert!(!is_valid_onion_address("example.com:1234"));
+        assert!(!is_valid_onion_address("example.onion:0"));
+        assert!(!is_valid_onion_address("example.onion"));
+        assert!(!is_valid_onion_address("127.0.0.1:8080"));
+    }
+}
+
+#[cfg(feature = "integration-test")]
+#[cfg(test)]
+mod tests_ipv4 {
+    use super::*;
+
+    #[test]
+    fn test_valid_ipv4_address() {
+        assert!(is_valid_address("127.0.0.1:8080"));
+        assert!(is_valid_address("192.168.1.1:65535"));
+    }
+
+    #[test]
+    fn test_invalid_ipv4_address() {
+        assert!(!is_valid_address("example.onion:1234"));
+        assert!(!is_valid_address("256.0.0.1:8080"));
+        assert!(!is_valid_address("127.0.0.1:0"));
+        assert!(!is_valid_address("127.0.0.1"));
+        assert!(!is_valid_address("::1:8080"));
+    }
 }

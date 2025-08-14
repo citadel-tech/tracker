@@ -1,5 +1,7 @@
 use std::time::Duration;
 
+#[cfg(feature = "integration-test")]
+use tokio::net::TcpStream;
 use tokio::{
     io::BufWriter,
     sync::mpsc::Sender,
@@ -23,7 +25,7 @@ const COOLDOWN_PERIOD: u64 = 5;
 pub async fn monitor_systems(
     db_tx: Sender<DbRequest>,
     status_tx: status::Sender,
-    socks_port: u16,
+    #[cfg(not(feature = "integration-test"))] socks_port: u16,
     onion_address: String,
     port: u16,
 ) -> Result<(), TrackerError> {
@@ -45,11 +47,15 @@ pub async fn monitor_systems(
 
                 let mut success = false;
                 for attempt in 1..=3 {
+                    #[cfg(not(feature = "integration-test"))]
                     let connect_result = Socks5Stream::connect(
                         format!("127.0.0.1:{socks_port:?}").as_str(),
                         address.clone(),
                     )
                     .await;
+
+                    #[cfg(feature = "integration-test")]
+                    let connect_result = TcpStream::connect(address.clone()).await;
 
                     match connect_result {
                         Ok(mut stream) => {

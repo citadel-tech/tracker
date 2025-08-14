@@ -24,6 +24,7 @@ mod utils;
 use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
 pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!();
 
+#[cfg(not(feature = "integration-test"))]
 #[derive(Debug, Clone)]
 pub struct Config {
     pub rpc_url: String,
@@ -32,6 +33,15 @@ pub struct Config {
     pub control_port: u16,
     pub tor_auth_password: String,
     pub socks_port: u16,
+    pub datadir: String,
+}
+
+#[cfg(feature = "integration-test")]
+#[derive(Debug, Clone)]
+pub struct Config {
+    pub rpc_url: String,
+    pub rpc_auth: Auth,
+    pub address: String,
     pub datadir: String,
 }
 
@@ -58,10 +68,12 @@ pub async fn start(cfg: Config) {
     run_migrations(pool.clone());
     info!("Connected to indexer db");
 
+    #[cfg(not(feature = "integration-test"))]
     tor::check_tor_status(cfg.control_port, &cfg.tor_auth_password)
         .await
         .expect("Failed to check Tor status");
 
+    #[cfg(not(feature = "integration-test"))]
     let hostname = match cfg.address.split_once(':') {
         Some((_, port)) => {
             let port = port.parse::<u16>().expect("Invalid port in address");
@@ -80,6 +92,9 @@ pub async fn start(cfg: Config) {
         }
     };
 
+    #[cfg(feature = "integration-test")]
+    let hostname = cfg.address.clone();
+
     info!("Tracker is listening at {}", hostname);
 
     let (mut db_tx, db_rx) = mpsc::channel::<DbRequest>(10);
@@ -93,6 +108,7 @@ pub async fn start(cfg: Config) {
         db_tx.clone(),
         status_tx.clone(),
         cfg.address.clone(),
+        #[cfg(not(feature = "integration-test"))]
         cfg.socks_port,
         hostname.clone(),
     )
@@ -125,6 +141,7 @@ pub async fn start(cfg: Config) {
                     db_tx.clone(),
                     status_tx.clone(),
                     cfg.address.clone(),
+                    #[cfg(not(feature = "integration-test"))]
                     cfg.socks_port,
                     hostname.clone(),
                 )
@@ -162,7 +179,7 @@ async fn spawn_server(
     db_tx: tokio::sync::mpsc::Sender<DbRequest>,
     status_tx: tokio::sync::mpsc::Sender<Status>,
     address: String,
-    socks_port: u16,
+    #[cfg(not(feature = "integration-test"))] socks_port: u16,
     hostname: String,
 ) {
     info!("Spawning server instance");
@@ -170,6 +187,7 @@ async fn spawn_server(
         db_tx,
         status::Sender::Server(status_tx),
         address,
+        #[cfg(not(feature = "integration-test"))]
         socks_port,
         hostname,
     ));
