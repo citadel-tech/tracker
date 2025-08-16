@@ -21,6 +21,14 @@ pub enum DbRequest {
     QueryAll(Sender<Vec<(String, ServerInfo)>>),
     QueryActive(Sender<Vec<String>>),
     WatchUtxo(OutPoint, Sender<Vec<MempoolTx>>),
+    AddSubscription(
+        OutPoint,
+        String,
+        tokio::sync::mpsc::Sender<UtxoSpentNotification>,
+    ),
+    RemoveSubscription(OutPoint, String),
+    GetSubscriptions(OutPoint, tokio::sync::mpsc::Sender<Vec<SubscriptionInfo>>),
+    NotifyUtxoSpent(OutPoint, UtxoSpentNotification),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, PartialOrd, Hash)]
@@ -53,6 +61,24 @@ pub struct DnsMetadata {
     pub url: String,
     /// Proof of the maker's fidelity bond funding.
     pub proof: FidelityProof,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct UtxoSpentNotification {
+    pub watched_outpoint: OutPoint,
+    pub spending_txid: String,
+    pub spending_input_index: u32,
+    pub block_height: Option<u32>,
+    pub confirmed: bool,
+    pub timestamp: chrono::NaiveDateTime,
+}
+
+#[derive(Clone, Debug)]
+pub struct SubscriptionInfo {
+    pub client_id: String,
+    pub outpoint: OutPoint,
+    pub subscribed_at: Instant,
+    pub connection_tx: tokio::sync::mpsc::Sender<UtxoSpentNotification>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
