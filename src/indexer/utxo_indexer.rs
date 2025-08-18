@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::db::model::{MempoolInput, MempoolTx, Utxo};
 use crate::db::schema::{mempool_inputs, mempool_tx, utxos};
 use crate::indexer::rpc::BitcoinRpc;
+use crate::types::{DbRequest, UtxoSpentNotification};
 use chrono::NaiveDateTime;
 use diesel::SqliteConnection;
 use diesel::prelude::*;
@@ -19,7 +20,7 @@ impl<'a> Indexer<'a> {
         Self { conn, rpc }
     }
 
-    pub fn process_mempool(&mut self) {
+    pub fn process_mempool(&mut self, db_tx: &tokio::sync::mpsc::Sender<DbRequest>) {
         let txids = self.rpc.get_raw_mempool().unwrap();
         let mut conn = self.conn.get().expect("Failed to get DB connection");
 
@@ -28,7 +29,7 @@ impl<'a> Indexer<'a> {
 
             self.insert_mempool_tx(&txid.to_string());
 
-            for input in &tx.input {
+            for (input_idx, input) in tx.input.iter().enumerate() {
                 let prevout = &input.previous_output;
                 diesel::insert_into(mempool_inputs::table)
                     .values(&MempoolInput {
@@ -38,6 +39,19 @@ impl<'a> Indexer<'a> {
                     })
                     .execute(&mut conn)
                     .unwrap();
+
+                let notification = UtxoSpentNotification {
+                    watched_outpoint: *prevout,
+                    spending_txid: txid.to_string(),
+                    spending_input_index: input_idx as u32,
+                    block_height: None,
+                    confirmed: false,
+                    timestamp: chrono::Utc::now().naive_utc(),
+                };
+
+                if let Err(e) = db_tx.try_send(DbRequest::NotifyUtxoSpent(*prevout, notification)) {
+                    tracing::warn!("Failed to send UTXO spent notification: {:?}", e);
+                }
 
                 self.mark_utxo_spent(
                     &txid.to_string(),
@@ -66,14 +80,28 @@ impl<'a> Indexer<'a> {
         }
     }
 
-    pub fn process_block(&mut self, height: u64) {
+    pub fn process_block(&mut self, height: u64, db_tx: &tokio::sync::mpsc::Sender<DbRequest>) {
         let block_hash = self.rpc.get_block_hash(height).unwrap();
         let block = self.rpc.get_block(block_hash).unwrap();
         let mut conn = self.conn.get().expect("Failed to get DB connection");
 
         for tx in block.txdata.iter() {
-            for input in &tx.input {
+            for (input_idx, input) in tx.input.iter().enumerate() {
                 let prevout = &input.previous_output;
+
+                let notification = UtxoSpentNotification {
+                    watched_outpoint: *prevout,
+                    spending_txid: tx.compute_txid().to_string(),
+                    spending_input_index: input_idx as u32,
+                    block_height: Some(height as u32),
+                    confirmed: true,
+                    timestamp: chrono::Utc::now().naive_utc(),
+                };
+
+                if let Err(e) = db_tx.try_send(DbRequest::NotifyUtxoSpent(*prevout, notification)) {
+                    tracing::warn!("Failed to send UTXO spent notification: {:?}", e);
+                }
+
                 self.mark_utxo_spent(
                     &prevout.txid.to_string(),
                     prevout.vout as i32,

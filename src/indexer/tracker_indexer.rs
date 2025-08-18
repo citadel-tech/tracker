@@ -28,10 +28,10 @@ pub async fn run(
     loop {
         let blockchain_info = handle_result!(status_tx, client.get_blockchain_info());
         let tip_height = blockchain_info.blocks + 1;
-        utxo_indexer.process_mempool();
+        utxo_indexer.process_mempool(&db_tx);
 
         for height in last_tip..tip_height {
-            utxo_indexer.process_block(height);
+            utxo_indexer.process_block(height, &db_tx);
             let block_hash = handle_result!(status_tx, client.get_block_hash(height));
             let block = handle_result!(status_tx, client.get_block(block_hash));
             for tx in block.txdata {
