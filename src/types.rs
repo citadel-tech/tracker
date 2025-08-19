@@ -98,6 +98,20 @@ pub enum TrackerClientToServer {
     Watch {
         outpoint: OutPoint,
     },
+    /// Subscribe to UTXO spending notifications
+    Subscribe {
+        outpoint: OutPoint,
+        client_id: String,
+    },
+
+    /// Unsubscribe from UTXO not/ifications
+    Unsubscribe {
+        outpoint: OutPoint,
+        client_id: String,
+    },
+
+    /// Keep connection alive
+    Heartbeat,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -105,4 +119,11 @@ pub enum TrackerServerToClient {
     Address { addresses: Vec<String> },
     Ping { address: String, port: u16 },
     WatchResponse { mempool_tx: Vec<MempoolTx> },
+    UtxoSpent(UtxoSpentNotification),
+
+    SubscriptionConfirmed { outpoint: OutPoint },
+
+    SubscriptionRemoved { outpoint: OutPoint },
+
+    HeartbeatAck,
 }

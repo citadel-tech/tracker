@@ -1,15 +1,19 @@
+use std::sync::Arc;
+
 use crate::db::model::MempoolTx;
 use crate::server::tracker_monitor::monitor_systems;
 use crate::status;
 use crate::types::DbRequest;
 use crate::types::TrackerClientToServer;
 use crate::types::TrackerServerToClient;
+use crate::types::UtxoSpentNotification;
 use crate::utils::read_message;
 use crate::utils::send_message;
 use tokio::io::BufReader;
 use tokio::io::BufWriter;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
+use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::Sender;
 use tracing::error;
@@ -47,12 +51,31 @@ pub async fn run(
 
     Ok(())
 }
-async fn handle_client(mut stream: TcpStream, db_tx: Sender<DbRequest>) {
-    let (read_half, write_half) = stream.split();
-    let mut reader = BufReader::new(read_half);
-    let mut writer = BufWriter::new(write_half);
+
+async fn handle_client(stream: TcpStream, db_tx: Sender<DbRequest>) {
+    let (notification_tx, mut notification_rx) = mpsc::channel::<UtxoSpentNotification>(100);
+
+    let stream = Arc::new(Mutex::new(stream));
+    let stream_clone = stream.clone();
+
+    tokio::spawn(async move {
+        while let Some(notification) = notification_rx.recv().await {
+            let message = TrackerServerToClient::UtxoSpent(notification);
+            let mut stream_guard = stream_clone.lock().await;
+            let (_, write_half) = (*stream_guard).split();
+            let mut writer = BufWriter::new(write_half);
+            if let Err(e) = send_message(&mut writer, &message).await {
+                error!("Failed to send notification to client: {}", e);
+                break;
+            }
+        }
+    });
 
     loop {
+        let mut stream_guard = stream.lock().await;
+        let (read_half, write_half) = stream_guard.split();
+        let mut reader = BufReader::new(read_half);
+        let mut writer = BufWriter::new(write_half);
         let buffer = match read_message(&mut reader).await {
             Ok(buf) => buf,
             Err(e) if e.io_error_kind() == Some(std::io::ErrorKind::UnexpectedEof) => {
@@ -124,6 +147,62 @@ async fn handle_client(mut stream: TcpStream, db_tx: Sender<DbRequest>) {
                         error!("Failed to send response to client: {e}");
                         break;
                     }
+                }
+            }
+
+            TrackerClientToServer::Subscribe {
+                outpoint,
+                client_id,
+            } => {
+                info!("Client {} subscribing to UTXO {:?}", client_id, outpoint);
+
+                let db_request = DbRequest::AddSubscription(
+                    outpoint,
+                    client_id.clone(),
+                    notification_tx.clone(),
+                );
+
+                if let Err(e) = db_tx.send(db_request).await {
+                    error!("Failed to send subscription request to DB: {}", e);
+                    break;
+                }
+
+                let confirmation = TrackerServerToClient::SubscriptionConfirmed { outpoint };
+                if let Err(e) = send_message(&mut writer, &confirmation).await {
+                    error!("Failed to send subscription confirmation: {}", e);
+                    break;
+                }
+            }
+
+            TrackerClientToServer::Unsubscribe {
+                outpoint,
+                client_id,
+            } => {
+                info!(
+                    "Client {} unsubscribing from UTXO {:?}",
+                    client_id, outpoint
+                );
+
+                let db_request = DbRequest::RemoveSubscription(outpoint, client_id.clone());
+
+                if let Err(e) = db_tx.send(db_request).await {
+                    error!("Failed to send unsubscribe request to DB: {}", e);
+                    break;
+                }
+
+                // Send confirmation
+                let confirmation = TrackerServerToClient::SubscriptionRemoved { outpoint };
+                if let Err(e) = send_message(&mut writer, &confirmation).await {
+                    error!("Failed to send unsubscription confirmation: {}", e);
+                    break;
+                }
+            }
+
+            TrackerClientToServer::Heartbeat => {
+                let heartbeat = TrackerServerToClient::HeartbeatAck;
+                if let Err(e) = send_message(&mut writer, &heartbeat).await {
+                    error!("Failed to send heartbeat ack: {}", e);
+                    break;
                 }
             }
         }
