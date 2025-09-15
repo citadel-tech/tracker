@@ -1,4 +1,5 @@
 use crate::db::model::MempoolTx;
+use crate::subscription::SubscriptionManager;
 use diesel::RunQueryDsl;
 use diesel::{ExpressionMethods, JoinOnDsl, QueryDsl, SqliteConnection, r2d2::ConnectionManager};
 use r2d2::Pool;
@@ -20,6 +21,7 @@ pub async fn run(
 ) {
     let mut servers: HashMap<String, ServerInfo> = HashMap::new();
     let mut conn = pool.get().unwrap();
+    let mut subscription_manager = SubscriptionManager::new();
     info!("DB manager started");
     while let Some(request) = rx.recv().await {
         match request {
@@ -63,6 +65,26 @@ pub async fn run(
                     .unwrap();
 
                 let _ = resp_tx.send(mempool_tx).await;
+            }
+            DbRequest::AddSubscription(outpoint, client_id, notification_tx) => {
+                info!("adding new subscription {client_id} for UTXO {outpoint:?} ");
+                subscription_manager.add_subscription(outpoint, client_id, notification_tx);
+            }
+            DbRequest::RemoveSubscription(outpoint, client_id) => {
+                info!("removing subscription (client_id: {client_id}) from UTXO {outpoint:?}");
+                subscription_manager.remove_subscription(outpoint, client_id);
+            }
+            DbRequest::GetSubscriptions(outpoint, resp_tx) => {
+                let count = subscription_manager.get_subscription_count(&outpoint);
+                info!("Queried subscriptions for {:?}: {} active", outpoint, count);
+
+                let _ = resp_tx
+                    .send(subscription_manager.get_subscriptions(outpoint))
+                    .await;
+            }
+            DbRequest::NotifyUtxoSpent(outpoint, notification) => {
+                info!("Processing UTXO spent notification for {:?}", outpoint);
+                subscription_manager.notify(outpoint, notification);
             }
         }
     }

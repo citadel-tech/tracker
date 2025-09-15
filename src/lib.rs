@@ -20,6 +20,7 @@ mod status;
 mod tor;
 mod types;
 mod utils;
+mod subscription;
 
 use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
 pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!();

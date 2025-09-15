@@ -36,3 +36,16 @@ pub struct MempoolInput {
     pub input_txid: String,
     pub input_vout: i32,
 }
+
+#[derive(Queryable, Insertable, Debug, Serialize, Deserialize)]
+#[diesel(table_name = crate::db::schema::utxo_subscriptions)]
+pub struct UtxoSubscription {
+    pub id: i32,
+    pub txid: String,
+    pub vout: i32,
+    pub client_id: String,
+    pub subscribed_at: chrono::NaiveDateTime,
+    pub active: bool,
+}
+
+

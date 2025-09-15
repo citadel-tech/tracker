@@ -30,3 +30,13 @@ CREATE TABLE mempool_inputs (
     FOREIGN KEY(txid) REFERENCES mempool_tx(txid),
     FOREIGN KEY(input_txid, input_vout) REFERENCES utxos(txid, vout)
 );
+
+CREATE TABLE utxo_subscriptions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    txid TEXT NOT NULL,
+    vout INTEGER NOT NULL,
+    client_id TEXT NOT NULL,
+    subscribed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    active BOOLEAN NOT NULL DEFAULT true,
+    FOREIGN KEY(txid, vout) REFERENCES utxos(txid, vout)
+);

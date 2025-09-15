@@ -25,6 +25,17 @@ diesel::table! {
 }
 
 diesel::table! {
+    utxo_subscriptions (id) {
+        id -> Nullable<Integer>,
+        txid -> Text,
+        vout -> Integer,
+        client_id -> Text,
+        subscribed_at -> Timestamp,
+        active -> Bool,
+    }
+}
+
+diesel::table! {
     utxos (txid, vout) {
         txid -> Text,
         vout -> Integer,
@@ -39,4 +50,10 @@ diesel::table! {
 
 diesel::joinable!(mempool_inputs -> mempool_tx (txid));
 
-diesel::allow_tables_to_appear_in_same_query!(mempool_inputs, mempool_tx, servers, utxos,);
+diesel::allow_tables_to_appear_in_same_query!(
+    mempool_inputs,
+    mempool_tx,
+    servers,
+    utxo_subscriptions,
+    utxos,
+);
